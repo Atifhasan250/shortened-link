@@ -1,6 +1,6 @@
 # Shortened Link: A Simple & Powerful URL Shortener
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fyour-github-username%2Fyour-repo-name)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FAtifhasan250%2Fshortened-link)
 
 Transform your long, unwieldy URLs into short, memorable, and shareable links with Shortened Link. Built with modern technologies, this app provides a fast, reliable, and easy-to-use platform for all your link shortening needs.
 
