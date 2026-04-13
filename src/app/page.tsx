@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -22,7 +21,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogClose,
 } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -34,63 +32,89 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
+} from "@/components/ui/alert-dialog";
 
-import { createShortLink, updateLink, deleteLink } from './actions';
+import { createShortLink, deleteLink, updateLink } from './actions';
 import { useToast } from '@/hooks/use-toast';
-import { Copy, Link as LinkIcon, Wand2, ClipboardPaste, Trash2 } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { ToastAction } from '@/components/ui/toast';
-import { getAllLinks, Link } from '@/lib/db';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Copy, Link as LinkIcon, Wand2, ClipboardPaste, Edit, Trash2 } from 'lucide-react';
 
 const formSchema = z.object({
   url: z.string().url({ message: 'Please enter a valid URL.' }),
   slug: z.string().min(3, { message: 'Custom name must be at least 3 characters.' }).regex(/^[a-zA-Z0-9_-]+$/, { message: 'Only letters, numbers, hyphens, and underscores are allowed.' }),
 });
 
-const adminAuthSchema = z.object({
-  username: z.string().min(1, { message: 'Username is required.' }),
-  password: z.string().min(1, { message: 'Password is required.' }),
-});
-
+type RecentLink = {
+  slug: string;
+  url: string;
+  editToken?: string;
+};
 
 export default function Home() {
   const [generatedLink, setGeneratedLink] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isManageModalOpen, setIsManageModalOpen] = useState(false);
-  const [slugToManage, setSlugToManage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [origin, setOrigin] = useState('');
-  const [linkHistory, setLinkHistory] = useState<Link[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [recentLinks, setRecentLinks] = useState<RecentLink[]>([]);
+  const [totalLinks, setTotalLinks] = useState<number | null>(null);
   const { toast } = useToast();
 
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [urlToUpdate, setUrlToUpdate] = useState('');
-  const [actionToPerform, setActionToPerform] = useState<'update' | 'delete' | null>(null);
-
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [slugToUpdate, setSlugToUpdate] = useState('');
+  const [newUrl, setNewUrl] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setOrigin(window.location.origin);
-      if (sessionStorage.getItem('isAdmin') === 'true') {
-        setIsAdmin(true);
-        setIsAdminAuthenticated(true);
+      const stored = localStorage.getItem('recentLinks');
+      if (stored) {
+        const parsedLinks: RecentLink[] = JSON.parse(stored);
+        setRecentLinks(parsedLinks);
+        
+        // Verify links against the database
+        if (parsedLinks.length > 0) {
+          verifyLinks(parsedLinks);
+        }
       }
     }
-    fetchHistory();
+    fetchStats();
   }, []);
-  
-  async function fetchHistory() {
-    setIsLoadingHistory(true);
-    const history = await getAllLinks();
-    setLinkHistory(history);
-    setIsLoadingHistory(false);
+
+  async function verifyLinks(links: RecentLink[]) {
+    try {
+      const slugs = links.map(l => l.slug);
+      const res = await fetch('/api/verify-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slugs })
+      });
+      
+      if (res.ok) {
+        const { validSlugs } = await res.json();
+        // Keep only links that still exist in the database
+        const stillValidLinks = links.filter(l => validSlugs.includes(l.slug));
+        
+        if (stillValidLinks.length !== links.length) {
+          setRecentLinks(stillValidLinks);
+          localStorage.setItem('recentLinks', JSON.stringify(stillValidLinks));
+        }
+      }
+    } catch (e) {
+      console.error('Failed to verify links', e);
+    }
   }
 
+  async function fetchStats() {
+    try {
+      const res = await fetch('/api/stats');
+      if (res.ok) {
+        const data = await res.json();
+        setTotalLinks(data.totalLinks);
+      }
+    } catch (e) {
+      console.error('Failed to fetch stats', e);
+    }
+  }
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -100,125 +124,10 @@ export default function Home() {
     },
   });
 
-  const adminAuthForm = useForm<z.infer<typeof adminAuthSchema>>({
-    resolver: zodResolver(adminAuthSchema),
-    defaultValues: {
-      username: '',
-      password: '',
-    }
-  });
-
-
   function showSuccessModal(shortUrl: string) {
     setGeneratedLink(`${origin}/${shortUrl}`);
     setIsModalOpen(true);
-    form.reset();
-    fetchHistory();
   }
-  
-  function openManageModal(slug: string, url: string, action: 'update' | 'delete') {
-    setSlugToManage(slug);
-    setUrlToUpdate(url);
-    setActionToPerform(action);
-    setAuthError('');
-    adminAuthForm.reset();
-
-    if (isAdminAuthenticated) {
-      if (action === 'update') {
-        handleAutoUpdate();
-      } else {
-        setIsManageModalOpen(true); 
-      }
-    } else {
-      setIsManageModalOpen(true);
-    }
-  }
-
-  async function onAdminAuthSubmit(values: z.infer<typeof adminAuthSchema>) {
-    if (values.username === 'fahim' && values.password === 'fahim') {
-      setIsAdminAuthenticated(true);
-      setIsAdmin(true);
-      sessionStorage.setItem('isAdmin', 'true');
-      setAuthError('');
-      
-      if (actionToPerform === 'update') {
-        await handleAutoUpdate();
-      } else if (actionToPerform === 'delete') {
-        setIsManageModalOpen(false);
-        // We need to re-trigger the alert dialog for deletion confirmation
-        // This is a bit tricky, so for now we will just close the auth modal
-        // and the user has to click delete again.
-        toast({
-          title: 'Authenticated!',
-          description: 'Please click the remove button again to confirm deletion.',
-        });
-
-      }
-
-    } else {
-      setAuthError('Invalid credentials. Only admins can manage links.');
-      setIsAdminAuthenticated(false);
-    }
-  }
-
-  async function handleAutoUpdate() {
-    try {
-      const result = await updateLink(slugToManage, urlToUpdate);
-      if (result.success && result.shortUrl) {
-        setIsManageModalOpen(false);
-        showSuccessModal(result.shortUrl);
-        toast({
-          title: 'Success!',
-          description: 'The link has been updated successfully.',
-        });
-      } else {
-        toast({
-          variant: 'destructive',
-          title: 'Error',
-          description: result.error || 'Failed to update link.',
-        });
-         setIsManageModalOpen(false);
-      }
-    } catch (error) {
-       toast({
-        variant: 'destructive',
-        title: 'Oh no! Something went wrong.',
-        description: 'There was a problem with your request.',
-      });
-       setIsManageModalOpen(false);
-    }
-  }
-  
-  async function handleDeleteLink(slug: string) {
-    if (!isAdminAuthenticated) {
-        openManageModal(slug, '', 'delete');
-        return;
-    }
-    
-    try {
-      const result = await deleteLink(slug);
-      if (result.success) {
-        toast({
-          title: "Success!",
-          description: "The link has been removed.",
-        });
-        fetchHistory();
-      } else {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: result.error || "Failed to remove link.",
-        });
-      }
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Oh no! Something went wrong.",
-        description: "There was a problem with your request.",
-      });
-    }
-  }
-
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsSubmitting(true);
@@ -226,55 +135,21 @@ export default function Home() {
       const result = await createShortLink(values);
       if (result.success && result.shortUrl) {
         showSuccessModal(result.shortUrl);
+        
+        // Save to recent links
+        const newLink = { slug: result.shortUrl, url: values.url, editToken: result.editToken };
+        const updatedRecent = [newLink, ...recentLinks.filter(l => l.slug !== newLink.slug)].slice(0, 10);
+        setRecentLinks(updatedRecent);
+        localStorage.setItem('recentLinks', JSON.stringify(updatedRecent));
+        
+        form.reset();
+        fetchStats(); // Update stats after creation
       } else {
-        if (result.error === 'This custom name is already taken.') {
-            toast({
-              variant: 'destructive',
-              title: 'Error',
-              description: (
-                <div className="flex flex-col items-start gap-2">
-                  <span>{result.error}</span>
-                   <div className="flex flex-row items-center justify-between mt-2 w-full">
-                     <ToastAction
-                      altText="See Link"
-                      onClick={() => showSuccessModal(values.slug)}
-                      className="bg-white text-black hover:bg-black hover:text-white"
-                    >
-                      See Link
-                    </ToastAction>
-                    <button
-                      onClick={() => openManageModal(values.slug, values.url, 'update')}
-                      className="text-sm underline hover:text-white/80 text-left cursor-pointer"
-                    >
-                      Manage Link
-                    </button>
-                  </div>
-                </div>
-              ),
-            });
-        } else if (result.error === 'This URL has already been shortened.' && result.shortUrl) {
-           toast({
-            variant: 'destructive',
-            title: 'Error',
-            description: result.error,
-            action: (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => showSuccessModal(result.shortUrl!)}
-                 className="bg-white text-black hover:bg-black hover:text-white"
-              >
-                See Link
-              </Button>
-            ),
-          });
-        } else {
-          toast({
-            variant: 'destructive',
-            title: 'Error',
-            description: result.error || 'Failed to create link.',
-          });
-        }
+        toast({
+          variant: 'destructive',
+          title: 'Error',
+          description: result.error || 'Failed to create link.',
+        });
       }
     } catch (error) {
       toast({
@@ -311,6 +186,50 @@ export default function Home() {
     }
   };
 
+  const handleDelete = async (slug: string, editToken?: string) => {
+    try {
+      const result = await deleteLink(slug, editToken);
+      if (result.success) {
+        toast({ title: 'Success', description: 'Link deleted successfully' });
+        const updated = recentLinks.filter(l => l.slug !== slug);
+        setRecentLinks(updated);
+        localStorage.setItem('recentLinks', JSON.stringify(updated));
+        fetchStats();
+      } else {
+        toast({ title: 'Error', description: result.error, variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to delete link', variant: 'destructive' });
+    }
+  };
+
+  const openUpdateModal = (slug: string, url: string) => {
+    setSlugToUpdate(slug);
+    setNewUrl(url);
+    setIsUpdateModalOpen(true);
+  };
+
+  const handleUpdate = async () => {
+    setIsUpdating(true);
+    const linkObj = recentLinks.find(l => l.slug === slugToUpdate);
+    try {
+      const result = await updateLink(slugToUpdate, newUrl, linkObj?.editToken);
+      if (result.success) {
+        toast({ title: 'Success', description: 'Link updated successfully' });
+        const updated = recentLinks.map(l => l.slug === slugToUpdate ? { ...l, url: newUrl } : l);
+        setRecentLinks(updated);
+        localStorage.setItem('recentLinks', JSON.stringify(updated));
+        setIsUpdateModalOpen(false);
+      } else {
+        toast({ title: 'Error', description: result.error, variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update link', variant: 'destructive' });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
     <div className="container mx-auto max-w-2xl py-12 px-4">
        <div className="flex flex-col items-center justify-center text-center px-4 mb-8">
@@ -320,7 +239,15 @@ export default function Home() {
         <p className="max-w-2xl text-lg md:text-xl text-muted-foreground">
           Transform your long, unwieldy URLs into short, memorable links. Create your magic link and share it with the world.
         </p>
+        
+        {totalLinks !== null && (
+          <div className="mt-4 inline-flex items-center rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+            <Wand2 className="mr-2 h-4 w-4 text-primary" />
+            {totalLinks} links shortened so far
+          </div>
+        )}
       </div>
+      
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="font-headline text-2xl text-center">Create a Magical Link</CardTitle>
@@ -372,80 +299,65 @@ export default function Home() {
         </CardContent>
       </Card>
       
-      <Card className="shadow-lg mt-8">
-        <CardHeader>
-          <CardTitle className="font-headline text-2xl text-center">Link History</CardTitle>
-          <CardDescription className="text-center">A list of created links in this app.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoadingHistory ? (
-             <div className="flex items-center justify-center h-24">
-                <div className="w-6 h-6 border-4 border-primary border-solid border-t-transparent rounded-full animate-spin"></div>
-             </div>
-          ) : linkHistory.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-center">Custom Name</TableHead>
-                  <TableHead className="text-center">Short Link</TableHead>
-                  <TableHead className="text-center">Original URL</TableHead>
-                  <TableHead className="text-center">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {linkHistory.map((link) => (
-                  <TableRow key={link.slug}>
-                    <TableCell className="font-medium">{link.slug}</TableCell>
-                    <TableCell>
-                       <div className="flex items-center justify-center gap-2">
-                        <a href={`${origin}/${link.slug}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{`${origin}/${link.slug}`}</a>
-                        <Button type="button" size="icon" variant="ghost" onClick={() => copyToClipboard(`${origin}/${link.slug}`)}>
-                          <Copy className="h-4 w-4" />
+      {recentLinks.length > 0 && (
+        <Card className="shadow-lg mt-8">
+          <CardHeader>
+            <CardTitle className="font-headline text-xl">Your Recent Links</CardTitle>
+            <CardDescription>Links you've shortened recently on this device.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {recentLinks.map((link) => (
+                <div key={link.slug} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border rounded-lg gap-4">
+                  <div className="overflow-hidden">
+                    <p className="font-medium text-primary hover:underline truncate">
+                      <a href={`${origin}/${link.slug}`} target="_blank" rel="noopener noreferrer">
+                        {origin}/{link.slug}
+                      </a>
+                    </p>
+                    <p className="text-sm text-muted-foreground truncate" title={link.url}>
+                      {link.url}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(`${origin}/${link.slug}`)}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    {link.editToken && (
+                      <>
+                        <Button variant="outline" size="icon" onClick={() => openUpdateModal(link.slug, link.url)}>
+                          <Edit className="h-4 w-4" />
                         </Button>
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-xs truncate">
-                      <a href={link.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{link.url}</a>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                            <Button variant="destructive" size="icon" onClick={(e) => {
-                                if (!isAdminAuthenticated) {
-                                    e.preventDefault();
-                                    openManageModal(link.slug, link.url, 'delete');
-                                }
-                            }}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This action cannot be undone. This will permanently delete the
-                              link for <span className="font-bold">{link.slug}</span>.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => handleDeleteLink(link.slug)}>
-                              Yes, delete it
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <p className="text-center text-muted-foreground">You haven't created any links yet.</p>
-          )}
-        </CardContent>
-      </Card>
-
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                              <Button variant="destructive" size="icon">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will permanently delete the short link <span className="font-bold">{link.slug}</span>.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => handleDelete(link.slug, link.editToken)}>
+                                Yes, delete it
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Success Modal */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
@@ -471,70 +383,28 @@ export default function Home() {
           </div>
         </DialogContent>
       </Dialog>
-      
-      {/* Manage/Auth Modal */}
-      <Dialog open={isManageModalOpen} onOpenChange={setIsManageModalOpen}>
+
+      {/* Update Modal */}
+      <Dialog open={isUpdateModalOpen} onOpenChange={setIsUpdateModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="font-headline text-center">
-              {actionToPerform === 'update' ? 'Manage Link' : 'Admin Authentication'}
-            </DialogTitle>
+            <DialogTitle>Update Link Destination</DialogTitle>
           </DialogHeader>
-          <div className="mt-4 flex flex-col gap-4">
-              {isAdminAuthenticated && actionToPerform === 'update' ? (
-                 <div className="flex flex-col items-center justify-center text-center p-4">
-                    <div className="w-12 h-12 border-4 border-primary border-solid border-t-transparent rounded-full animate-spin mb-4"></div>
-                    <p className="text-lg text-muted-foreground">Authentication successful. Updating link...</p>
-                </div>
-              ) : (
-                <>
-                  <p className="text-center text-muted-foreground">
-                    {actionToPerform === 'update' 
-                      ? <>The custom name <span className="font-bold text-primary">{slugToManage}</span> is already taken. Please authenticate to update the URL it points to.</>
-                      : 'Please authenticate to proceed with deleting the link.'
-                    }
-                  </p>
-                  <Form {...adminAuthForm}>
-                    {authError && (
-                        <Alert variant="destructive">
-                          <AlertTitle>Authentication Failed</AlertTitle>
-                          <AlertDescription>{authError}</AlertDescription>
-                        </Alert>
-                      )}
-                    <form onSubmit={adminAuthForm.handleSubmit(onAdminAuthSubmit)} className="space-y-4">
-                      <FormField
-                        control={adminAuthForm.control}
-                        name="username"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Admin Username</FormLabel>
-                            <FormControl>
-                              <Input placeholder="Enter admin username" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={adminAuthForm.control}
-                        name="password"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Admin Password</FormLabel>
-                            <FormControl>
-                              <Input type="password" placeholder="Enter admin password" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <Button type="submit" className="w-full">
-                       {actionToPerform === 'update' ? 'Authenticate and Update' : 'Authenticate'}
-                      </Button>
-                    </form>
-                  </Form>
-                </>
-              )}
+          <div className="space-y-4 pt-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">New Target URL for /{slugToUpdate}</label>
+              <Input 
+                value={newUrl} 
+                onChange={e => setNewUrl(e.target.value)}
+                placeholder="https://example.com"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setIsUpdateModalOpen(false)}>Cancel</Button>
+              <Button onClick={handleUpdate} disabled={isUpdating || !newUrl.trim()}>
+                {isUpdating ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

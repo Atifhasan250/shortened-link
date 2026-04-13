@@ -1,11 +1,11 @@
-import { db } from './firebase';
-import { collection, doc, getDoc, setDoc, query, where, getDocs, limit, updateDoc, deleteDoc } from 'firebase/firestore';
-
-const linksCollection = collection(db, 'links');
+import connectDB from './mongodb';
+import LinkModel, { ILink } from '@/models/Link';
 
 export type Link = {
   slug: string;
   url: string;
+  createdAt: Date;
+  clickCount: number;
 };
 
 type SaveLinkResult = {
@@ -14,34 +14,31 @@ type SaveLinkResult = {
   existingSlug?: string;
 };
 
-
-export async function saveLink(slug: string, url: string): Promise<SaveLinkResult> {
+export async function saveLink(slug: string, url: string, editToken: string): Promise<SaveLinkResult> {
   try {
-    const slugDocRef = doc(db, 'links', slug);
-    const slugDocSnap = await getDoc(slugDocRef);
+    await connectDB();
 
-    if (slugDocSnap.exists()) {
+    const existingSlug = await LinkModel.findOne({ slug }).lean();
+    if (existingSlug) {
       return { success: false, error: 'This custom name is already taken.' };
     }
 
-    // Check if the URL has already been shortened with a different slug.
-    const urlQuery = query(linksCollection, where('url', '==', url), limit(1));
-    const urlQuerySnapshot = await getDocs(urlQuery);
-
-    if (!urlQuerySnapshot.empty) {
-      const existingDoc = urlQuerySnapshot.docs[0];
+    const existingUrl = await LinkModel.findOne({ url }).lean();
+    if (existingUrl) {
       return {
         success: false,
         error: 'This URL has already been shortened.',
-        existingSlug: existingDoc.id,
+        existingSlug: (existingUrl as any).slug,
       };
     }
 
-    await setDoc(slugDocRef, { url });
-    console.log(`Saved: ${slug} -> ${url}`);
+    await LinkModel.create({ slug, url, editToken });
     return { success: true };
-  } catch (error) {
-    console.error("Error saving link: ", error);
+  } catch (error: any) {
+    console.error('Error saving link:', error);
+    if (error.code === 11000) {
+      return { success: false, error: 'This custom name is already taken.' };
+    }
     return { success: false, error: 'An error occurred while saving the link.' };
   }
 }
@@ -51,77 +48,95 @@ type UpdateLinkResult = {
   error?: string;
 };
 
-export async function updateExistingLink(slug: string, newUrl: string): Promise<UpdateLinkResult> {
+export async function updateExistingLink(slug: string, newUrl: string, editToken?: string): Promise<UpdateLinkResult> {
   try {
-    const slugDocRef = doc(db, 'links', slug);
-    
-    // Optional: Check if the new URL is already shortened with another slug
-    const urlQuery = query(linksCollection, where('url', '==', newUrl), limit(1));
-    const urlQuerySnapshot = await getDocs(urlQuery);
-    if (!urlQuerySnapshot.empty) {
-        const existingDoc = urlQuerySnapshot.docs[0];
-        if (existingDoc.id !== slug) {
-            return {
-                success: false,
-                error: `This URL is already linked to the custom name: ${existingDoc.id}`,
-            };
-        }
+    await connectDB();
+
+    const link = await LinkModel.findOne({ slug }).lean();
+    if (!link) {
+      return { success: false, error: 'Link not found.' };
     }
-    
-    await updateDoc(slugDocRef, { url: newUrl });
-    console.log(`Updated: ${slug} -> ${newUrl}`);
+
+    // Verify token if provided, instead of relying solely on actions level
+    if (editToken && (link as any).editToken !== editToken) {
+      return { success: false, error: 'Unauthorized: Invalid edit token.' };
+    }
+
+    const existingUrl = await LinkModel.findOne({ url: newUrl, slug: { $ne: slug } }).lean();
+    if (existingUrl) {
+      return {
+        success: false,
+        error: `This URL is already linked to: ${(existingUrl as any).slug}`,
+      };
+    }
+
+    const updated = await LinkModel.findOneAndUpdate(
+      { slug },
+      { url: newUrl },
+      { returnDocument: 'after' }
+    );
+
+    if (!updated) {
+      return { success: false, error: 'Failed to update link.' };
+    }
+
     return { success: true };
   } catch (error) {
-    console.error("Error updating link: ", error);
-    if ((error as any).code === 'not-found') {
-       return { success: false, error: 'This custom name does not exist.' };
-    }
+    console.error('Error updating link:', error);
     return { success: false, error: 'An error occurred while updating the link.' };
   }
 }
 
-
 export async function getLink(slug: string): Promise<string | null> {
   try {
-    const docRef = doc(db, 'links', slug);
-    const docSnap = await getDoc(docRef);
-
-    if (docSnap.exists()) {
-      const url = docSnap.data().url;
-      console.log(`Retrieved: ${slug} -> ${url}`);
-      return url;
-    } else {
-      console.log(`No link found for slug: ${slug}`);
-      return null;
-    }
+    await connectDB();
+    const link = await LinkModel.findOneAndUpdate(
+      { slug },
+      { $inc: { clickCount: 1 } },
+      { returnDocument: 'after' }
+    ).lean();
+    return link ? (link as any).url : null;
   } catch (error) {
-    console.error("Error getting link: ", error);
+    console.error('Error getting link:', error);
     return null;
   }
 }
 
-export async function getAllLinks(): Promise<Link[]> {
+export async function getAllLinks(page = 1, limit = 20): Promise<{ links: Link[]; total: number }> {
   try {
-    const querySnapshot = await getDocs(linksCollection);
-    const links: Link[] = [];
-    querySnapshot.forEach((doc) => {
-      links.push({ slug: doc.id, ...doc.data() } as Link);
-    });
-    console.log(`Retrieved ${links.length} links.`);
-    return links.sort((a, b) => a.slug.localeCompare(b.slug)); // Sort alphabetically by slug
+    await connectDB();
+    const skip = (page - 1) * limit;
+    const [links, total] = await Promise.all([
+      LinkModel.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      LinkModel.countDocuments(),
+    ]);
+    return {
+      links: links.map((l: any) => ({
+        slug: l.slug,
+        url: l.url,
+        createdAt: l.createdAt,
+        clickCount: l.clickCount,
+      })),
+      total,
+    };
   } catch (error) {
-    console.error("Error getting all links: ", error);
-    return [];
+    console.error('Error getting all links:', error);
+    return { links: [], total: 0 };
   }
 }
 
-export async function deleteLink(slug: string): Promise<void> {
-    try {
-        const docRef = doc(db, 'links', slug);
-        await deleteDoc(docRef);
-        console.log(`Deleted link with slug: ${slug}`);
-    } catch (error) {
-        console.error("Error deleting link: ", error);
-        throw error; // Re-throw the error to be handled by the caller
+export async function deleteLink(slug: string, editToken?: string): Promise<void> {
+  try {
+    await connectDB();
+    if (editToken) {
+      const link = await LinkModel.findOne({ slug }).lean();
+      if (!link || (link as any).editToken !== editToken) {
+        throw new Error('Unauthorized');
+      }
     }
+    await LinkModel.findOneAndDelete({ slug });
+  } catch (error) {
+    console.error('Error deleting link:', error);
+    throw error;
+  }
 }
