@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /admin/
 
-Sitemap: https://shortened.link/sitemap.xml
+Sitemap: https://shortened-link.vercel.app/sitemap.xml
