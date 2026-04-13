@@ -22,7 +22,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (username !== adminUsername) return null;
         if (password !== adminPassword) return null;
 
-        return { id: '1', name: 'Admin', email: 'admin@shortened.link' };
+        return { id: '1', name: 'Admin', email: 'atifhasan000000@gmail.com' };
       },
     }),
   ],

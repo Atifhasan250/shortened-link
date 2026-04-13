@@ -22,14 +22,14 @@ const cacheBuster = `?v=${new Date().getTime()}`;
 const iconUrl = `/icon.svg${cacheBuster}`;
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://shortened.link'),
+  metadataBase: new URL('https://shortened-link.vercel.app'),
   title: 'Shortened Link | Free & Simple URL Shortener',
   description: 'The easiest way to shorten, manage, and track your links. Create short, memorable, and branded links for free with our powerful and easy-to-use platform.',
   keywords: ['url shortener', 'link shortener', 'custom url', 'branded links', 'free url shortener', 'link management', 'short links'],
   openGraph: {
     title: 'Shortened Link | Free & Simple URL Shortener',
     description: 'The easiest way to shorten, manage, and track your links. Create short, memorable, and branded links for free.',
-    url: 'https://shortened.link',
+    url: 'https://shortened-link.vercel.app',
     siteName: 'Shortened Link',
     images: [
       {
